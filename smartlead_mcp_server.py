@@ -187,7 +187,8 @@ if __name__ == "__main__":
         if arg == "--transport" and i + 1 < len(sys.argv):
             transport = sys.argv[i + 1]
     if transport == "http":
-        mcp.run(transport="sse")
+        port = int(os.environ.get("PORT", "10000"))
+        mcp.run(transport="sse", host="0.0.0.0", port=port)
     else:
         mcp.run(transport="stdio")
  
