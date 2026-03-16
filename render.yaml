@@ -3,7 +3,10 @@ services:
     name: x41-smartlead-mcp
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: python smartlead_mcp_server.py --transport http --port 10000
+    startCommand: python smartlead_mcp_server.py --transport http
     envVars:
       - key: SMARTLEAD_API_KEY
         sync: false
+      - key: PORT
+        value: "10000"
+ 
