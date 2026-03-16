@@ -187,8 +187,29 @@ if __name__ == "__main__":
         if arg == "--transport" and i + 1 < len(sys.argv):
             transport = sys.argv[i + 1]
     if transport == "http":
+        import uvicorn
+        from starlette.applications import Starlette
+        from starlette.routing import Route, Mount
+        from starlette.responses import JSONResponse
+        from mcp.server.sse import SseServerTransport
+
+        sse = SseServerTransport("/messages/")
+
+        async def handle_sse(request):
+            async with sse.connect_sse(request.scope, request.receive, request._send) as streams:
+                await mcp._mcp_server.run(streams[0], streams[1], mcp._mcp_server.create_initialization_options())
+
+        async def health(request):
+            return JSONResponse({"status": "ok", "server": "X41 Command Center MCP"})
+
+        app = Starlette(routes=[
+            Route("/health", health),
+            Route("/sse", endpoint=handle_sse),
+            Mount("/messages/", app=sse.handle_post_message),
+        ])
+
         port = int(os.environ.get("PORT", "10000"))
-        mcp.run(transport="sse", host="0.0.0.0", port=port)
+        uvicorn.run(app, host="0.0.0.0", port=port)
     else:
         mcp.run(transport="stdio")
  
