@@ -8,14 +8,20 @@ import json
 import httpx
 from mcp.server.fastmcp import FastMCP
  
-# --- Config ---
 API_KEY = os.environ.get("SMARTLEAD_API_KEY", "")
 BASE_URL = "https://server.smartlead.ai/api/v1"
  
 mcp = FastMCP("X41 Command Center")
  
  
-async def _get(path: str, params: dict = None) -> dict:
+def to_int(val):
+    try:
+        return int(val or 0)
+    except (ValueError, TypeError):
+        return 0
+ 
+ 
+async def _get(path, params=None):
     url = f"{BASE_URL}{path}"
     p = {"api_key": API_KEY}
     if params:
@@ -23,7 +29,7 @@ async def _get(path: str, params: dict = None) -> dict:
     async with httpx.AsyncClient(timeout=30) as client:
         r = await client.get(url, params=p)
         if r.status_code == 429:
-            return {"error": "Rate limit hit. Wait 60 seconds and try again."}
+            return {"error": "Rate limit hit. Wait 60 seconds."}
         if r.status_code == 404:
             return {"error": f"Not found: {path}"}
         if r.status_code >= 400:
@@ -45,19 +51,23 @@ async def smartlead_list_campaigns() -> str:
  
 @mcp.tool()
 async def smartlead_get_campaign_stats(campaign_id: int) -> str:
-    """Get detailed stats for one campaign: sent, opens, replies, bounces, rates."""
+    """Get detailed stats for one campaign."""
     data = await _get(f"/campaigns/{campaign_id}/analytics")
     if isinstance(data, dict) and "error" in data:
         return json.dumps(data)
-    sent = data.get("sent_count", 0)
+    sent = to_int(data.get("sent_count"))
+    opens = to_int(data.get("open_count"))
+    clicks = to_int(data.get("click_count"))
+    replies = to_int(data.get("reply_count"))
+    bounces = to_int(data.get("bounce_count"))
+    unsubs = to_int(data.get("unsubscribed_count"))
     stats = {
         "campaign_id": data.get("id"), "campaign_name": data.get("name"), "status": data.get("status"),
-        "sent_count": sent, "open_count": data.get("open_count", 0), "click_count": data.get("click_count", 0),
-        "reply_count": data.get("reply_count", 0), "bounce_count": data.get("bounce_count", 0),
-        "unsubscribed_count": data.get("unsubscribed_count", 0),
-        "open_rate": round(data.get("open_count", 0) / sent * 100, 1) if sent else 0,
-        "reply_rate": round(data.get("reply_count", 0) / sent * 100, 1) if sent else 0,
-        "bounce_rate": round(data.get("bounce_count", 0) / sent * 100, 1) if sent else 0,
+        "sent_count": sent, "open_count": opens, "click_count": clicks,
+        "reply_count": replies, "bounce_count": bounces, "unsubscribed_count": unsubs,
+        "open_rate": round(opens / sent * 100, 1) if sent else 0,
+        "reply_rate": round(replies / sent * 100, 1) if sent else 0,
+        "bounce_rate": round(bounces / sent * 100, 1) if sent else 0,
     }
     return json.dumps(stats, indent=2)
  
@@ -74,15 +84,17 @@ async def smartlead_get_all_campaign_stats() -> str:
         data = await _get(f"/campaigns/{cid}/analytics")
         if isinstance(data, dict) and "error" in data:
             continue
-        sent = data.get("sent_count", 0)
+        sent = to_int(data.get("sent_count"))
+        opens = to_int(data.get("open_count"))
+        replies = to_int(data.get("reply_count"))
+        bounces = to_int(data.get("bounce_count"))
         results.append({
             "campaign_id": cid, "campaign_name": data.get("name", c.get("name")),
             "status": data.get("status", c.get("status")), "sent_count": sent,
-            "open_count": data.get("open_count", 0), "reply_count": data.get("reply_count", 0),
-            "bounce_count": data.get("bounce_count", 0),
-            "open_rate": round(data.get("open_count", 0) / sent * 100, 1) if sent else 0,
-            "reply_rate": round(data.get("reply_count", 0) / sent * 100, 1) if sent else 0,
-            "bounce_rate": round(data.get("bounce_count", 0) / sent * 100, 1) if sent else 0,
+            "open_count": opens, "reply_count": replies, "bounce_count": bounces,
+            "open_rate": round(opens / sent * 100, 1) if sent else 0,
+            "reply_rate": round(replies / sent * 100, 1) if sent else 0,
+            "bounce_rate": round(bounces / sent * 100, 1) if sent else 0,
         })
     return json.dumps(results, indent=2)
  
@@ -169,10 +181,10 @@ async def smartlead_get_analytics_overall() -> str:
         data = await _get(f"/campaigns/{cid}/analytics")
         if isinstance(data, dict) and "error" in data:
             continue
-        totals["total_sent"] += data.get("sent_count", 0)
-        totals["total_opens"] += data.get("open_count", 0)
-        totals["total_replies"] += data.get("reply_count", 0)
-        totals["total_bounces"] += data.get("bounce_count", 0)
+        totals["total_sent"] += to_int(data.get("sent_count"))
+        totals["total_opens"] += to_int(data.get("open_count"))
+        totals["total_replies"] += to_int(data.get("reply_count"))
+        totals["total_bounces"] += to_int(data.get("bounce_count"))
     if totals["total_sent"] > 0:
         totals["overall_open_rate"] = round(totals["total_opens"] / totals["total_sent"] * 100, 1)
         totals["overall_reply_rate"] = round(totals["total_replies"] / totals["total_sent"] * 100, 1)
@@ -192,24 +204,23 @@ if __name__ == "__main__":
         from starlette.routing import Route, Mount
         from starlette.responses import JSONResponse
         from mcp.server.sse import SseServerTransport
-
+ 
         sse = SseServerTransport("/messages/")
-
+ 
         async def handle_sse(request):
             async with sse.connect_sse(request.scope, request.receive, request._send) as streams:
                 await mcp._mcp_server.run(streams[0], streams[1], mcp._mcp_server.create_initialization_options())
-
+ 
         async def health(request):
             return JSONResponse({"status": "ok", "server": "X41 Command Center MCP"})
-
+ 
         app = Starlette(routes=[
             Route("/health", health),
             Route("/sse", endpoint=handle_sse),
             Mount("/messages/", app=sse.handle_post_message),
         ])
-
+ 
         port = int(os.environ.get("PORT", "10000"))
         uvicorn.run(app, host="0.0.0.0", port=port)
     else:
         mcp.run(transport="stdio")
- 
